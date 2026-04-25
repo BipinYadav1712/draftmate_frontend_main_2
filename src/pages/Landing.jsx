@@ -170,40 +170,83 @@ const Landing = () => {
     ];
 
     return (
-        <div className="bg-slate-50 dark:bg-[#101622] text-[#111318] font-sans overflow-x-hidden">
-            {/* Header */}
-            <header className="sticky top-0 z-50 flex items-center justify-between whitespace-nowrap border-b border-solid border-b-[#f0f2f4] bg-white/95 backdrop-blur-sm px-6 py-3 lg:px-40">
-                <Link to="/" className="flex items-center gap-4 text-[#111318]">
-                    <div className="h-12 flex items-center justify-center hover:opacity-80 transition-opacity">
-                        <img src={fullLogo} alt="DraftMate" className="h-full object-contain" />
-                    </div>
-                </Link>
-                <div className="hidden lg:flex flex-1 justify-end gap-8">
-                    <div className="flex items-center gap-9">
-                        <a href="https://lawjurist.com/" target="_blank" rel="noopener noreferrer" className="text-[#111318] text-sm font-medium leading-normal hover:text-primary transition-colors cursor-pointer">Law Jurist</a>
-                        <Link to="/features" className="text-[#111318] text-sm font-medium leading-normal hover:text-primary transition-colors">Features</Link>
-                        <Link to="/blogs" className="text-[#111318] text-sm font-medium leading-normal hover:text-primary transition-colors">Blogs</Link>
-                        <button onClick={() => scrollToSection('testimonials')} className="text-[#111318] text-sm font-medium leading-normal hover:text-primary transition-colors cursor-pointer">About</button>
-                        <a onClick={() => setIsSubscriptionModalOpen(true)} className="text-[#111318] text-sm font-medium leading-normal hover:text-primary transition-colors cursor-pointer">Pricing</a>
-                        <Link to="/faqs" className="text-[#111318] text-sm font-medium leading-normal hover:text-primary transition-colors">FAQs</Link>
-                        <Link to="/how-it-works" className="text-[#111318] text-sm font-medium leading-normal hover:text-primary transition-colors">How it Works</Link>
-                    </div>
-                    <div className="flex gap-2">
-                        <Link to="/login" className="flex min-w-[84px] cursor-pointer items-center justify-center overflow-hidden rounded-lg h-10 px-4 bg-primary text-white text-sm font-bold leading-normal tracking-[0.015em] hover:bg-primary/90 transition-colors">
-                            <span className="truncate">Start Drafting</span>
-                        </Link>
-                        <Link to="/login" className="flex min-w-[84px] cursor-pointer items-center justify-center overflow-hidden rounded-lg h-10 px-4 bg-[#f0f2f4] text-[#111318] text-sm font-bold leading-normal tracking-[0.015em] hover:bg-[#e0e2e4] transition-colors">
-                            <span className="truncate">Login</span>
-                        </Link>
-                    </div>
-                </div>
-                <button
-                    className="lg:hidden p-2 hover:bg-slate-100 rounded-lg transition-colors"
-                    onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                >
-                    <span className="material-symbols-outlined text-2xl">{mobileMenuOpen ? 'close' : 'menu'}</span>
-                </button>
-            </header>
+       <div className="bg-slate-50 dark:bg-[#101622] text-[#111318] font-sans overflow-x-hidden">
+    {/* Header */}
+    <header className="sticky top-0 z-50 flex items-center whitespace-nowrap border-b border-solid border-b-[#f0f2f4] bg-white/95 backdrop-blur-sm px-6 py-3 lg:px-10">
+
+        {/* Logo — extreme left */}
+        <Link to="/" className="flex items-center gap-4 text-[#111318] flex-shrink-0">
+            <div className="h-12 flex items-center justify-center hover:opacity-80 transition-opacity">
+                <img src={fullLogo} alt="DraftMate" className="h-full object-contain" />
+            </div>
+        </Link>
+
+        {/* Nav Links — centered */}
+        <nav className="hidden lg:flex absolute left-1/2 -translate-x-1/2 items-center gap-1">
+
+            <a href="https://lawjurist.com/" target="_blank" rel="noopener noreferrer"
+                className="group flex flex-col items-center px-3 py-1 rounded-md text-[#111318] text-large font-medium hover:text-primary hover:bg-blue-50 transition-colors cursor-pointer">
+                <span>Law Jurist</span>
+                <span className="block h-0.5 bg-primary rounded-full w-0 group-hover:w-full transition-all duration-300"></span>
+            </a>
+
+            <Link to="/features"
+                className="group flex flex-col items-center px-3 py-1 rounded-md text-[#111318] text-large font-medium hover:text-primary hover:bg-blue-50 transition-colors">
+                <span>Features</span>
+                <span className="block h-0.5 bg-primary rounded-full w-0 group-hover:w-full transition-all duration-300"></span>
+            </Link>
+
+            <Link to="/blogs"
+                className="group flex flex-col items-center px-3 py-1 rounded-md text-[#111318] text-large font-medium hover:text-primary hover:bg-blue-50 transition-colors">
+                <span>Blogs</span>
+                <span className="block h-0.5 bg-primary rounded-full w-0 group-hover:w-full transition-all duration-300"></span>
+            </Link>
+
+            <button onClick={() => scrollToSection('testimonials')}
+                className="group flex flex-col items-center px-3 py-1 rounded-md text-[#111318] text-large font-medium hover:text-primary hover:bg-blue-50 transition-colors cursor-pointer">
+                <span>About</span>
+                <span className="block h-0.5 bg-primary rounded-full w-0 group-hover:w-full transition-all duration-300"></span>
+            </button>
+
+            <a onClick={() => setIsSubscriptionModalOpen(true)}
+                className="group flex flex-col items-center px-3 py-1 rounded-md text-[#111318] text-large font-medium hover:text-primary hover:bg-blue-50 transition-colors cursor-pointer">
+                <span>Pricing</span>
+                <span className="block h-0.5 bg-primary rounded-full w-0 group-hover:w-full transition-all duration-300"></span>
+            </a>
+
+            <Link to="/faqs"
+                className="group flex flex-col items-center px-3 py-1 rounded-md text-[#111318] text-large font-medium hover:text-primary hover:bg-blue-50 transition-colors">
+                <span>FAQs</span>
+                <span className="block h-0.5 bg-primary rounded-full w-0 group-hover:w-full transition-all duration-300"></span>
+            </Link>
+
+            <Link to="/how-it-works"
+                className="group flex flex-col items-center px-3 py-1 rounded-md text-[#111318] text-large font-medium hover:text-primary hover:bg-blue-50 transition-colors">
+                <span>How it Works</span>
+                <span className="block h-0.5 bg-primary rounded-full w-0 group-hover:w-full transition-all duration-300"></span>
+            </Link>
+
+        </nav>
+
+        {/* Buttons — extreme right */}
+        <div className="hidden lg:flex items-center gap-2 ml-auto flex-shrink-0">
+            <Link to="/login"
+                className="flex min-w-[120px] cursor-pointer items-center justify-center rounded-lg h-10 px-4 bg-primary text-white text-sm font-bold tracking-[0.015em] hover:bg-primary/90 hover:-translate-y-0.5 transition-all duration-200 shadow-sm hover:shadow-md">
+                <span className="truncate">Start Drafting</span>
+            </Link>
+            <Link to="/login"
+                className="flex min-w-[84px] cursor-pointer items-center justify-center rounded-lg h-10 px-4 bg-[#f0f2f4] text-[#111318] text-sm font-bold tracking-[0.015em] hover:bg-[#e0e2e4] hover:-translate-y-0.5 transition-all duration-200 border border-[#e5e7eb]">
+                <span className="truncate">Login</span>
+            </Link>
+        </div>
+
+        {/* Mobile Hamburger */}
+        <button className="lg:hidden p-2 ml-auto hover:bg-slate-100 rounded-lg transition-colors"
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+            <span className="material-symbols-outlined text-2xl">{mobileMenuOpen ? 'close' : 'menu'}</span>
+        </button>
+
+    </header>
 
             {/* Mobile Menu */}
             {mobileMenuOpen && (
@@ -347,7 +390,7 @@ const Landing = () => {
                 <div className="flex flex-col items-center gap-8 max-w-[960px] mx-auto">
                     <h3 className="text-[#616f89] text-xl font-serif text-center">We've been featured in</h3>
                     <div className="flex flex-wrap justify-center items-center gap-8 md:gap-16 w-full opacity-70">
-                        <div className="h-8 md:h-10 grayscale hover:grayscale-0 transition-all duration-300 cursor-pointer flex items-center gap-2">
+                        <div className="h-8 md:h-10 grayscale hover:grayscale-0 transition-all duration-300 cursor-pointer flex items-center gap-2 animate-float animation-delay:1s">
                             <img src={inshortsLogo} alt="Inshorts" className="h-full object-contain" />
                         </div>
                         <div className="h-8 md:h-10 grayscale hover:grayscale-0 transition-all duration-300 cursor-pointer flex items-center gap-2">

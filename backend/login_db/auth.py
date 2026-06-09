@@ -199,6 +199,11 @@ def verify_session(session_id: str):
         cur.close()
         conn.close()
 
+
+@app.patch("/users/{user_id}/profile")
+async def update_profile(user_id: str, data: ProfileUpdate):
+    
+
 @app.get("/profile/{user_id}")
 def get_profile(user_id: str):
     conn = get_db_connection()

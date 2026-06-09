@@ -54,10 +54,7 @@ const formData = new FormData();
 formData.append("file", fileInput.files[0]);
 formData.append("session_id", "session_123"); // Optional: Generate a UUID if new
 
-await fetch("http://localhost:8004/upload", {
-  method: "POST",
-  body: formData
-});
+await axios.post("http://localhost:5000/auth/register");
 ```
 
 **Response:**

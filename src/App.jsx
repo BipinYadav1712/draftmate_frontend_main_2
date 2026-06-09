@@ -1,4 +1,5 @@
 import React from 'react';
+import StudentDetails from './pages/StudentDetails';
 import { GoogleOAuthProvider } from '@react-oauth/google';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import MainLayout from './layouts/MainLayout';
@@ -82,7 +83,7 @@ function App() {
 
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
-
+            <Route path="/onboarding/student-details" element={<StudentDetails />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/onboarding" element={<Onboarding />} />
@@ -123,6 +124,7 @@ function App() {
         </BrowserRouter>
       </NotificationProvider>
     </GoogleOAuthProvider>
+
   );
 }
 

@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import fullLogo from "../assets/FULL_LOGO.svg"; // ✅ Added import
 import "./Onboarding.css";
 
 const roles = [
@@ -84,6 +85,15 @@ const roles = [
   },
 ];
 
+// ✅ Role to Route Mapping
+const ROLE_ROUTES = {
+  law_student: "/onboarding/student-details",
+  advocate: "/onboarding/advocate-details",
+  law_firm: "/onboarding/firm-details",
+  ca_cs: "/onboarding/ca-details",
+  non_legal: "/onboarding/user-details",
+};
+
 const Onboarding = () => {
   const navigate = useNavigate();
   const [selectedRole, setSelectedRole] = useState(null);
@@ -111,7 +121,7 @@ const Onboarding = () => {
     setTimeout(() => navigate(path), 800);
   };
 
-  // ✅ CLEAN handleContinue - localStorage only, NO API CALL
+  // ✅ UPDATED handleContinue - routes to specific details page based on role
   const handleContinue = async () => {
     if (!selectedRole) {
       toast.error("Please select a role to continue.");
@@ -122,6 +132,7 @@ const Onboarding = () => {
     const loadingToast = toast.loading("Personalizing your experience...");
 
     try {
+      // Save selected role to localStorage
       const userProfile = JSON.parse(
         localStorage.getItem("user_profile") || "{}"
       );
@@ -133,11 +144,9 @@ const Onboarding = () => {
       toast.dismiss(loadingToast);
       toast.success("Profile updated!");
 
-      if (selectedRole === "law_student") {
-        triggerExitAndNavigate("/onboarding/student-details");
-      } else {
-        triggerExitAndNavigate("/dashboard/home");
-      }
+      // ✅ Route to the corresponding details page based on selected role
+      const nextRoute = ROLE_ROUTES[selectedRole] || "/dashboard/home";
+      triggerExitAndNavigate(nextRoute);
     } catch (error) {
       toast.dismiss(loadingToast);
       toast.error(error.message || "Something went wrong");
@@ -241,13 +250,11 @@ const Onboarding = () => {
         </div>
       </div>
 
+      {/* ✅ UPDATED HEADER with fullLogo */}
       <header className="onboarding-header anim-fade-down">
-        <span className="onboarding-logo">
-          <svg className="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 3v18M6 8l6-5 6 5M4 21h16M6 21V11M18 21V11" />
-          </svg>
-          DraftMate
-        </span>
+        <a href="/" className="onboarding-logo">
+          <img src={fullLogo} alt="DraftMate" className="logo-image" />
+        </a>
         <div className="onboarding-header-actions">
           <button onClick={handleSkip} className="skip-btn" disabled={isLoading}>
             Skip for now

@@ -7,7 +7,7 @@ import Dashboard from './pages/Dashboard';
 import Editor from './pages/Editor';
 import PDFEditor from './pages/PDFEditor';
 import MyDrafts from './pages/MyDrafts';
-
+import LawyersProfile from './pages/dashboard/LawyersProfile';
 import ResearchChat from './pages/ResearchChat';
 import Tools from './pages/Tools';
 import ChatWithPDF from './pages/ChatWithPDF';
@@ -16,7 +16,10 @@ import CaseSearch from './pages/CaseSearch';
 import Settings from './pages/Settings';
 import HelpCenter from './pages/HelpCenter';
 import PaymentStatus from './pages/PaymentStatus';
-
+import AdvocateDetails from "./pages/AdvocateDetails";
+import FirmDetails from "./pages/FirmDetails";
+import CADetails from "./pages/CADetails";
+import UserDetails from "./pages/UserDetails";
 
 // Placeholder for other routes
 const Placeholder = ({ title }) => (
@@ -25,8 +28,6 @@ const Placeholder = ({ title }) => (
     <p>This feature is coming soon.</p>
   </div>
 );
-
-
 
 import { Toaster } from 'sonner';
 
@@ -97,6 +98,10 @@ function App() {
             <Route path="/blogs" element={<ComingSoon title="Blog" />} />
 
             <Route path="/dashboard" element={<Navigate to="/dashboard/home" replace />} />
+            <Route path="/onboarding/advocate-details" element={<AdvocateDetails />} />
+            <Route path="/onboarding/firm-details" element={<FirmDetails />} />
+            <Route path="/onboarding/ca-details" element={<CADetails />} />
+            <Route path="/onboarding/user-details" element={<UserDetails />} />
 
             <Route path="/dashboard" element={<RequireAuth><MainLayout /></RequireAuth>}>
               <Route path="home" element={<Dashboard />} />
@@ -107,6 +112,7 @@ function App() {
               <Route path="research" element={<ResearchChat />} />
               <Route path="chat-pdf" element={<ChatWithPDF />} />
               <Route path="case-search" element={<CaseSearch />} />
+              <Route path="lawyers-profile" element={<LawyersProfile />} />
               <Route path="settings" element={<Settings />} />
               <Route path="help" element={<HelpCenter />} />
               <Route path="notifications" element={<Notifications />} />
@@ -124,7 +130,6 @@ function App() {
         </BrowserRouter>
       </NotificationProvider>
     </GoogleOAuthProvider>
-
   );
 }
 

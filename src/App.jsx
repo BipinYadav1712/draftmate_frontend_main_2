@@ -7,7 +7,6 @@ import Dashboard from './pages/Dashboard';
 import Editor from './pages/Editor';
 import PDFEditor from './pages/PDFEditor';
 import MyDrafts from './pages/MyDrafts';
-import LawyersProfile from './pages/dashboard/LawyersProfile';
 import ResearchChat from './pages/ResearchChat';
 import Tools from './pages/Tools';
 import ChatWithPDF from './pages/ChatWithPDF';
@@ -112,7 +111,6 @@ function App() {
               <Route path="research" element={<ResearchChat />} />
               <Route path="chat-pdf" element={<ChatWithPDF />} />
               <Route path="case-search" element={<CaseSearch />} />
-              <Route path="lawyers-profile" element={<LawyersProfile />} />
               <Route path="settings" element={<Settings />} />
               <Route path="help" element={<HelpCenter />} />
               <Route path="notifications" element={<Notifications />} />

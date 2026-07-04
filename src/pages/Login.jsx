@@ -6,6 +6,25 @@ import logo from '../assets/draftmate_logo.png';
 import fullLogo from '../assets/FULL_LOGO.svg';
 import { API_CONFIG } from '../services/endpoints';
 
+const readJsonSafely = async (response) => {
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+        const text = await response.text();
+        return text ? { detail: text } : {};
+    }
+
+    const text = await response.text();
+    if (!text) {
+        return {};
+    }
+
+    try {
+        return JSON.parse(text);
+    } catch {
+        return { detail: text };
+    }
+};
+
 const Login = () => {
     const navigate = useNavigate();
     const [email, setEmail] = useState('');

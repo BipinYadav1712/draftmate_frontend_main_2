@@ -6,6 +6,11 @@ from dotenv import load_dotenv
 _this_dir = Path(__file__).parent
 load_dotenv(_this_dir / ".env")
 
+# Also search in the root workspace folder (3 levels up)
+_root_env = _this_dir.parent.parent.parent / ".env"
+if _root_env.is_file():
+    load_dotenv(_root_env)
+
 # --- API KEYS ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -13,6 +18,7 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")  # Fallback search
 GOOGLE_SERP_API_KEY = os.getenv("GOOGLE_SERP_API_KEY")  # Fallback search
 FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
+INDIAN_KANOON_API_KEY = os.getenv("IKApi", "").strip()
 # Database Config
 POSTGRES_DSN = os.getenv("POSTGRES_DSN")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -40,17 +46,17 @@ OPENAI_REASONING_MODEL = "gpt-4o"
 LLM_MODEL_NAME = GEMINI_FAST_MODEL
 
 # --- EMBEDDING MODEL ---
-EMBEDDING_MODEL_NAME = os.getenv("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-RERANK_MODEL = os.getenv("RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+EMBEDDING_MODEL_NAME = os.getenv("EMBED_MODEL") or "sentence-transformers/all-MiniLM-L6-v2"
+RERANK_MODEL = os.getenv("RERANK_MODEL") or "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 # --- SEARCH CONFIG ---
-DB_SEARCH_LIMIT_PRE = 200
+DB_SEARCH_LIMIT_PRE = 150  # Reduced from 200 for faster reranking (Step 10b)
 DB_SEARCH_LIMIT_FINAL = 20
 WEB_SEARCH_MAX_RESULTS = 5
 WEB_CACHE_TTL_SECONDS = 3600  # 1 hour
 
 # --- RATE LIMITING ---
-SCRAPE_DELAY_SECONDS = float(os.getenv("SCRAPE_DELAY", 2.5))
+SCRAPE_DELAY_SECONDS = float(os.getenv("SCRAPE_DELAY", 2.0))  # Reduced from 2.5s (Step 9b)
 
 # --- MEMORY (mem0) ---
 MEM0_ENABLED = os.getenv("MEM0_ENABLED", "true").lower() == "true"
@@ -59,10 +65,9 @@ MEM0_ENABLED = os.getenv("MEM0_ENABLED", "true").lower() == "true"
 SESSION_CACHE_TTL_MINUTES = int(os.getenv("SESSION_CACHE_TTL", 30))
 
 # --- TARGET WEBSITES ---
-TARGET_CASE_SITE = "indiankanoon.org"
-
+# Indian Kanoon is now accessed via API (indian_kanoon_api.py), not web scraping.
+# Removed from PREFERRED_DOMAINS so Tavily doesn't waste a search slot on it.
 PREFERRED_DOMAINS = [
-    "indiankanoon.org",
     "legalserviceindia.com",
     "scconline.com",
     "livelaw.in",

@@ -1,7 +1,6 @@
 from typing import Dict, Any
 from .base_agent import BaseAgent
 from ..tools.db_search import search_tool
-from ..tools.reranker import rerank_documents
 from ..config import PREFERRED_DOMAINS
 
 class LawAgent(BaseAgent):
@@ -24,7 +23,7 @@ class LawAgent(BaseAgent):
         try:
             print(f"⚖️ Law Agent Task: {instruction[:80]}...")
             
-            # 1. Enhance Query
+            # 1. Enhance Query (improves keyword matching for DB/web search)
             enhanced_query = self.enhance_query(instruction, "law")
             print(f"   Enhanced: {enhanced_query[:80]}...")
             
@@ -53,12 +52,8 @@ class LawAgent(BaseAgent):
                 except Exception as e:
                     print(f"   ⚠️ Web augmentation failed: {e}")
             
-            # 4. Rerank against original instruction
-            # (Reranker handles the combined list)
-            reranked = rerank_documents(instruction, all_results, top_n=10)
-            
-            # 5. Return update
-            return {"law_context": reranked}
+            # Return top results — manager_aggregate reranks across all agents globally
+            return {"law_context": all_results[:15]}
         except Exception as e:
             print(f"❌ Law Agent Failed: {e}")
             return {"law_context": [], "errors": [f"Law Agent failed: {str(e)}"]} 

@@ -13,6 +13,14 @@ Endpoints:
 """
 
 import os
+
+# Set thread limits BEFORE PyTorch or SentenceTransformers are imported
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import uuid
 import time
 import json
@@ -45,18 +53,20 @@ if current_dir not in sys.path:
     sys.path.append(os.path.dirname(current_dir))
     sys.path.append(current_dir)
 
-from lex_bot.graph import run_query
+from lex_bot.graph import run_query, prepare_initial_state, app as langgraph_app
 from lex_bot.memory import UserMemoryManager
 from lex_bot.memory.chat_store import ChatStore
 from lex_bot.config import MEM0_ENABLED, DATABASE_URL
 from lex_bot.tools.session_cache import get_session_cache
 from lex_bot.core.observability import setup_langsmith
+from lex_bot.graph import MEM0_ENABLED, _get_memory_manager
 # Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(levelname)s | %(name)s | %(message)s'
 )
 logger = logging.getLogger("lex_bot.api")
+DEV_BYPASS_AUTH = os.getenv("DEV_BYPASS_AUTH", "false").lower() == "true"
 
 try:
     from backend.query.sql import start_tunnel_and_pool, _get_tunneled_dsn
@@ -110,32 +120,53 @@ async def lifespan(app: FastAPI):
         with engine.connect() as conn:
             # Check connection
             conn.execute(text("SELECT 1"))
-            logger.info("✅ Database connected")
+            logger.info("Database connected")
             
             # Check pgvector extension
             result = conn.execute(text("SELECT * FROM pg_extension WHERE extname = 'vector'"))
             if not result.fetchone():
-                logger.warning("⚠️ 'vector' extension not found. Attempting to create...")
+                logger.warning(" 'vector' extension not found. Attempting to create...")
                 try:
                     conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
                     conn.commit()
-                    logger.info("✅ 'vector' extension created")
+                    logger.info(" 'vector' extension created")
                 except Exception as ext_e:
-                    logger.error(f"❌ Failed to create 'vector' extension: {ext_e}")
+                    logger.error(f" Failed to create 'vector' extension: {ext_e}")
                     logger.error("Please run 'CREATE EXTENSION vector;' in your database manually.")
             else:
-                logger.info("✅ 'vector' extension verified")
+                logger.info(" 'vector' extension verified")
                 
     except Exception as e:
-        logger.error(f"❌ Database Error: {e}")
+        logger.error(f" Database Error: {e}")
         print("\n" + "="*60)
-        print("❌ CRITICAL ERROR: Database Connection Failed")
+        print("CRITICAL ERROR: Database Connection Failed")
         print("="*60)
         print(f"Error: {e}")
         print("\nPlease ensure PostgreSQL is running and DATABASE_URL is correct.")
         
+    # Pre-load Reranker model at startup (Step 10a)
+    # Avoids cold-start penalty on first request (~2-5s model load)
+    try:
+        from lex_bot.tools.reranker import get_reranker
+        logger.info("Pre-loading reranker model...")
+        reranker = get_reranker()
+        if reranker:
+            logger.info("✅ Reranker model pre-loaded")
+        else:
+            logger.warning("⚠️ Reranker not available (sentence-transformers missing?)")
+    except Exception as e:
+        logger.warning(f"⚠️ Reranker pre-load failed (non-fatal): {e}")
+        
+    # Start the memory worker
+    memory_worker_task = asyncio.create_task(_memory_worker())
+        
     yield
     logger.info("👋 Lex Bot v2 shutting down...")
+    memory_worker_task.cancel()
+    try:
+        await memory_worker_task
+    except asyncio.CancelledError:
+        pass
     await http_client.aclose()
 
 
@@ -148,7 +179,7 @@ app = FastAPI(
 )
 
 # Global HTTP Client
-http_client = httpx.AsyncClient()
+http_client = httpx.AsyncClient(timeout=30.0)
 
 # CORS middleware
 app.add_middleware(
@@ -197,7 +228,7 @@ async def upload_file(
         }
         
     except Exception as e:
-        print(f"❌ Upload Error: {e}")
+        print(f" Upload Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -227,6 +258,51 @@ class ChatResponse(BaseModel):
     processing_time_ms: int
     suggested_followups: Optional[List[str]] = None  # Follow-up questions
 
+memory_queue = asyncio.Queue(maxsize=100)
+
+def _store_memory_sync(user_id: str, query: str, answer: str):
+    """Synchronous function to interact with mem0."""
+    if not user_id or not MEM0_ENABLED:
+        return
+    memory_manager = _get_memory_manager(user_id)
+    messages = [
+        {"role": "user", "content": query},
+        {"role": "assistant", "content": answer[:1000]}  # Truncate
+    ]
+    memory_manager.add(messages)
+    logger.info(f"💾 Sequentially stored conversation to mem0 for user {user_id}")
+
+async def _memory_worker():
+    """Background worker that processes memory storage sequentially with retries."""
+    while True:
+        try:
+            user_id, query, answer = await memory_queue.get()
+            
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, _store_memory_sync, user_id, query, answer)
+                    break
+                except Exception as e:
+                    logger.warning(f"Memory store failed (attempt {attempt+1}/{max_retries}): {e}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(1.0 * (2 ** attempt)) # 1s, 2s
+                    else:
+                        logger.error(f"⚠️ Failed to store memory after {max_retries} attempts.")
+            
+            memory_queue.task_done()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Critical error in memory worker: {e}")
+
+def _background_memory_store(user_id: str, query: str, answer: str):
+    """(Step 16) Enqueues memory task non-blockingly."""
+    try:
+        memory_queue.put_nowait((user_id, query, answer))
+    except asyncio.QueueFull:
+        logger.error("⚠️ Memory queue full! Dropping memory to prevent OOM.")
 
 class SessionResponse(BaseModel):
     session_id: str
@@ -288,6 +364,8 @@ async def verify_token(request: Request):
     Verify session token with Auth Service.
     Expects 'Authorization: Bearer <session_id>' or 'session_id' in body/query.
     """
+    if DEV_BYPASS_AUTH:
+        return "dev_user"
     # 1. Try Authorization header
     auth_header = request.headers.get("Authorization")
     session_id = None
@@ -319,14 +397,27 @@ async def verify_token(request: Request):
 
     try:
         url = f"{AUTH_SERVICE_URL}/verify_session/{session_id}"
-        resp = await http_client.get(url)
-        if resp.status_code != 200:
-            logger.warning(f"Auth check failed for {session_id}: {resp.status_code} {resp.text}")
-            raise HTTPException(status_code=401, detail="Invalid session")
-        return resp.json().get("user_id")
-    except httpx.RequestError as e:
-        logger.error(f"Auth service connection failed to {url}: {repr(e)}")
-        raise HTTPException(status_code=500, detail="Auth service unavailable")
+        
+        # Add retries for intermittent timeouts
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = await http_client.get(url, timeout=10.0)
+                if resp.status_code != 200:
+                    logger.warning(f"Auth check failed for {session_id}: {resp.status_code} {resp.text}")
+                    raise HTTPException(status_code=401, detail="Invalid session")
+                return resp.json().get("user_id")
+            except httpx.ReadTimeout as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Auth service connection failed to {url} after {max_retries} attempts: {repr(e)}")
+                    raise HTTPException(status_code=500, detail="Auth service unavailable")
+                logger.warning(f"Auth service timeout (attempt {attempt+1}/{max_retries}), retrying...")
+                await asyncio.sleep(1)
+            except httpx.RequestError as e:
+                logger.error(f"Auth service connection failed to {url}: {repr(e)}")
+                raise HTTPException(status_code=500, detail="Auth service unavailable")
+    except HTTPException:
+        raise
 
 
 @app.get("/")
@@ -402,7 +493,9 @@ async def chat_stream(request: ChatRequest, user_id: str = Depends(verify_token)
     )
 
 def generate_title(query: str) -> str:
-    """Generate a short 3-5 word title for the chat session."""
+    """Generate a short 3-5 word title for the chat session.
+    Uses the shared get_llm() factory — no external GenerativeModel dependency.
+    """
     try:
         logger.info(f"Generating title for query: {query[:50]}...")
         # Simple heuristic for very short queries
@@ -410,22 +503,65 @@ def generate_title(query: str) -> str:
             logger.info("Query short enough, using as title")
             return query[:50]
             
-        # Use LLM to summarize
-        from backend.query.QueryParsing import GenerativeModel
-        model = GenerativeModel("gemini-2.5-flash")
-        response = model.generate_content(
-            f"Summarize this query into a concise 3-5 word title. Do not use quotes. Query: {query}"
+        # Use shared LLM factory (fast mode for titles)
+        from lex_bot.core.llm_factory import get_llm
+        from langchain_core.output_parsers import StrOutputParser
+        from langchain_core.prompts import ChatPromptTemplate
+
+        llm = get_llm(mode="fast")
+        prompt = ChatPromptTemplate.from_template(
+            "Summarize this query into a concise 3-5 word title. "
+            "Do not use quotes. Output ONLY the title.\n\nQuery: {query}"
         )
-        title = response.text.strip()
+        chain = prompt | llm | StrOutputParser()
+        title = chain.invoke({"query": query}).strip()
         logger.info(f"Generated title: {title}")
         return title
     except Exception as e:
         logger.error(f"Title generation failed: {e}")
         return query[:50]
 
+
+async def _background_generate_title(session_id: str, user_id: str, query: str):
+    """Fire-and-forget title generation. Runs after streaming starts."""
+    try:
+        loop = asyncio.get_running_loop()
+        title = await loop.run_in_executor(None, generate_title, query)
+        chat_store.update_session_title(session_id, user_id, title)
+        logger.info(f" Background title generated: {title}")
+    except Exception as e:
+        logger.error(f"Background title generation failed: {e}")
+
+
+def _generate_followups_sync(query: str, answer: str, llm_mode: str = "fast") -> list:
+    """
+    Generate follow-up questions synchronously (runs in thread pool).
+    Separated from agents so it runs post-stream, not on the critical path.
+    """
+    try:
+        from lex_bot.core.llm_factory import get_llm
+        from langchain_core.prompts import ChatPromptTemplate
+        from langchain_core.output_parsers import JsonOutputParser
+        
+        llm = get_llm(mode="fast")  # Always use fast mode for followups
+        prompt = ChatPromptTemplate.from_template("""You are a helpful legal assistant.
+Based on the user's query and your answer, suggest 3 relevant follow-up questions the user might want to ask next.
+
+Query: {query}
+Answer: {answer}
+
+Return ONLY a JSON list of strings, e.g.: ["Question 1?", "Question 2?", "Question 3?"]""")
+        chain = prompt | llm | JsonOutputParser()
+        result = chain.invoke({"query": query, "answer": answer[:2000]})
+        return result if isinstance(result, list) else []
+    except Exception as e:
+        logger.warning(f"Follow-up generation failed: {e}")
+        return []
+
+
 async def _stream_chat(request: ChatRequest, user_id: str):
     """Generator for streaming responses."""
-    logger.info(f"➡️ _stream_chat called for user_id={user_id}, session_id={request.session_id}")
+    logger.info(f" _stream_chat called for user_id={user_id}, session_id={request.session_id}")
     session_id = request.session_id or str(uuid.uuid4())
     
     # Send status update
@@ -442,51 +578,119 @@ async def _stream_chat(request: ChatRequest, user_id: str):
             content=request.query
         )
         
-        # Generate and store title if it's a new session (or check if title exists)
+        # Generate title in background (non-blocking)
         current_title = chat_store.get_session_title(session_id)
         if not current_title or current_title == "New Chat":
-            logger.info("Generating title...")
-            new_title = generate_title(request.query)
-            chat_store.update_session_title(session_id, user_id, new_title)
+            logger.info("Launching background title generation...")
+            asyncio.create_task(_background_generate_title(session_id, user_id, request.query))
 
     try:
-        logger.info(f"🚀 Calling run_query for session {session_id}...")
+        logger.info(f"🚀 Calling graph for session {session_id} with node tracking...")
         
-        # Run run_query in a separate thread to allow yielding keep-alive pings
+        import queue
+        
+        tracked_nodes = {
+            "memory_recall", "router", "research_agent", "document_agent", 
+            "law_agent", "case_agent", "citation_agent", "strategy_agent", 
+            "explainer_agent", "manager_aggregate", "memory_store"
+        }
+        
+        from lex_bot.core.timing import LatencyTracker
+        tracker = LatencyTracker()
+        
         loop = asyncio.get_running_loop()
-        future = loop.run_in_executor(
-            None, 
-            lambda: run_query(
+        initial_state = await loop.run_in_executor(
+            None,
+            lambda: prepare_initial_state(
                 query=request.query,
                 user_id=user_id,
                 session_id=session_id,
-                llm_mode="fast"
+                llm_mode="fast",
+                chat_store_instance=chat_store,
+                tracker=tracker
             )
         )
         
-        # Wait for result while yielding pings
-        while not future.done():
-            await asyncio.sleep(2)  # Check every 2 seconds
-            # Yield a ping/status update to keep connection alive
-            yield f"data: {json.dumps({'event': 'ping', 'message': 'Processing...'})}\n\n"
+        node_runs = {}
+        result = None
+        
+        try:
+            async for event in langgraph_app.astream_events(initial_state, version="v2"):
+                kind = event["event"]
+                name = event.get("name", "")
+                run_id = event.get("run_id")
+                
+                if kind == "on_chain_start" and name in tracked_nodes:
+                    node_runs[run_id] = name
+                    yield f"data: {json.dumps({'event': 'node_update', 'node': name, 'status': 'running'})}\n\n"
+                    
+                elif kind == "on_chain_end" and name in tracked_nodes:
+                    yield f"data: {json.dumps({'event': 'node_update', 'node': name, 'status': 'complete'})}\n\n"
+                    
+                elif kind == "on_chat_model_stream":
+                    active_node = None
+                    tags = event.get("tags", [])
+                    
+                    for tag in tags:
+                        if tag.startswith("langgraph:node:"):
+                            node_name = tag.replace("langgraph:node:", "")
+                            if node_name in tracked_nodes:
+                                active_node = node_name
+                                break
+                                
+                    if not active_node:
+                        for pid in event.get("parent_ids", []):
+                            if pid in node_runs:
+                                active_node = node_runs[pid]
+                                break
+                                
+                    if active_node:
+                        chunk = event.get("data", {}).get("chunk")
+                        if chunk:
+                            content = chunk.content if hasattr(chunk, "content") else str(chunk)
+                            if content:
+                                yield f"data: {json.dumps({'event': 'node_stream', 'node': active_node, 'chunk': content})}\n\n"
+                                
+                elif kind == "on_chain_end" and not event.get("parent_ids"):
+                    result = event.get("data", {}).get("output")
+        except Exception as e:
+            logger.error(f"Error in astream_events: {e}")
+            raise
             
-        result = await future
-        logger.info("✅ run_query returned successfully")
+        tracker.summary()
+        if not result:
+            result = {}
+        result["latency"] = tracker.as_dict()
+        logger.info(" Graph execution returned successfully")
         
         answer = result.get("final_answer", "I apologize, but I couldn't generate a response.")
-        suggested_followups = result.get("suggested_followups", [])
         sources = result.get("sources", [])
         
-        # Yield the final answer
+        # Yield the final answer FIRST (user sees it immediately)
         yield f"data: {json.dumps({'event': 'answer', 'content': answer})}\n\n"
-        
-        # Yield followups
-        if suggested_followups:
-            yield f"data: {json.dumps({'event': 'followups', 'questions': suggested_followups})}\n\n"
             
-        # Yield sources
+        # Yield sources immediately (don't wait for followups)
         if sources:
             yield f"data: {json.dumps({'event': 'sources', 'sources': sources})}\n\n"
+
+        # Generate followups post-stream (Step 8) — non-blocking
+        # User already has their answer, followups are a bonus
+        followup_future = loop.run_in_executor(
+            None,
+            lambda: _generate_followups_sync(request.query, answer, "fast")
+        )
+        
+        try:
+            suggested_followups = await asyncio.wait_for(followup_future, timeout=15.0)
+        except asyncio.TimeoutError:
+            logger.warning("Follow-up generation timed out (15s)")
+            suggested_followups = []
+
+        if suggested_followups:
+            yield f"data: {json.dumps({'event': 'followups', 'questions': suggested_followups})}\n\n"
+
+        if "latency" in result:
+            yield f"data: {json.dumps({'event': 'latency', 'latency': result['latency']})}\n\n"
 
         yield f"data: {json.dumps({'event': 'done', 'message': 'Complete'})}\n\n"
         
@@ -501,9 +705,11 @@ async def _stream_chat(request: ChatRequest, user_id: str):
                     "complexity": result.get("complexity"),
                     "agents": result.get("selected_agents"),
                     "sources": sources,
-                    "suggested_followups": suggested_followups
                 }
             )
+            
+            # (Step 16) Fire and forget mem0 storage
+            _background_memory_store(user_id, request.query, answer)
             
     except Exception as e:
         logger.error(f"Stream error: {e}")
@@ -524,11 +730,10 @@ async def _process_chat(request: ChatRequest, user_id: str, reasoning_mode: bool
             content=request.query
         )
         
-        # Generate title
+        # Generate title in background (non-blocking)
         current_title = chat_store.get_session_title(session_id)
         if not current_title or current_title == "New Chat":
-            new_title = generate_title(request.query)
-            chat_store.update_session_title(session_id, user_id, new_title)
+            asyncio.create_task(_background_generate_title(session_id, user_id, request.query))
 
     try:
         # Run LangGraph workflow
@@ -536,14 +741,22 @@ async def _process_chat(request: ChatRequest, user_id: str, reasoning_mode: bool
             query=request.query,
             user_id=user_id,
             session_id=session_id,
-            llm_mode="reasoning" if reasoning_mode else "fast"
+            llm_mode="reasoning" if reasoning_mode else "fast",
+            chat_store_instance=chat_store
         )
         
         answer = result.get("final_answer", "I apologize, but I couldn't generate a response.")
         include_cot = reasoning_mode
-        suggested_followups = result.get("suggested_followups", [])
-        
-        # Store assistant response
+
+        # Start follow-up generation in background while we do DB saves
+        loop = asyncio.get_running_loop()
+        followup_future = loop.run_in_executor(
+            None, _generate_followups_sync,
+            request.query, answer, "reasoning" if reasoning_mode else "fast"
+        )
+        suggested_followups = []
+
+        # Store assistant response (runs concurrently with followup generation)
         if user_id:
             chat_store.add_message(
                 user_id=user_id,
@@ -554,9 +767,17 @@ async def _process_chat(request: ChatRequest, user_id: str, reasoning_mode: bool
                     "complexity": result.get("complexity"),
                     "agents": result.get("selected_agents"),
                     "sources": result.get("sources", []),
-                    "suggested_followups": suggested_followups
                 }
             )
+
+            # (Step 16) Fire and forget mem0 storage
+            _background_memory_store(user_id, request.query, answer)
+
+        # Collect followups — they've had time to generate during DB save above
+        try:
+            suggested_followups = await asyncio.wait_for(followup_future, timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.info("Follow-up generation still running — returning without followups")
         
         processing_time = int((time.time() - start_time) * 1000)
         
@@ -572,7 +793,7 @@ async def _process_chat(request: ChatRequest, user_id: str, reasoning_mode: bool
         )
         
     except Exception as e:
-        logger.error(f"❌ Chat error: {e}", exc_info=True)
+        logger.error(f" Chat error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

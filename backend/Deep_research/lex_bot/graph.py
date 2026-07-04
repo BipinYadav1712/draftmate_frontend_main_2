@@ -63,22 +63,70 @@ from .memory import UserMemoryManager
 from .config import MEM0_ENABLED
 
 
+import time as _time
+from cachetools import TTLCache
+
+# ============ Cached UserMemoryManager ============
+# Avoids re-initializing mem0's embedding model on every request.
+# TTL ensures stale managers are eventually garbage collected.
+_user_memory_cache: Dict[str, tuple] = {}  # user_id -> (UserMemoryManager, timestamp)
+_MEMORY_CACHE_TTL = 300  # 5 minutes
+
+# ============ Memory Results Cache ============
+# Caches mem0 search results per user for 3 minutes.
+# Eliminates repeated 3-8s mem0 searches for every message in a session.
+# Quality impact is minimal: long-term memories (profession, style, specialization)
+# are stable across query topics within a session.
+_memory_results_cache: TTLCache = TTLCache(maxsize=500, ttl=180)
+
+
+def _get_memory_manager(user_id: str) -> "UserMemoryManager":
+    """Get or create a cached UserMemoryManager for a user."""
+    now = _time.monotonic()
+    if user_id in _user_memory_cache:
+        mgr, ts = _user_memory_cache[user_id]
+        if now - ts < _MEMORY_CACHE_TTL:
+            return mgr
+    mgr = UserMemoryManager(user_id=user_id)
+    _user_memory_cache[user_id] = (mgr, now)
+    return mgr
+
+
 def memory_recall_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Fetch relevant memories for context enrichment.
+    
+    Optimizations:
+    - Skips mem0 search on first message (no history = no useful memories)
+    - Uses cached UserMemoryManager (avoids re-init per request)
     """
     user_id = state.get("user_id")
     if not user_id or not MEM0_ENABLED:
         return {"memory_context": []}
     
+    # Gate: skip mem0 on first message — no conversation history means
+    # no meaningful memories to retrieve yet
+    messages = state.get("messages", [])
+    if not messages:
+        print(f"⚡ First message — skipping memory recall for user {user_id}")
+        return {"memory_context": []}
+    
     try:
-        memory_manager = UserMemoryManager(user_id=user_id)
+        # Cache hit: skip mem0 entirely for messages after the first in a session
+        if user_id in _memory_results_cache:
+            cached = _memory_results_cache[user_id]
+            print(f"⚡ Memory cache HIT for user {user_id} ({len(cached)} memories, skipping mem0)")
+            return {"memory_context": cached}
+
+        memory_manager = _get_memory_manager(user_id)
         query = state.get("original_query", "")
         memories = memory_manager.search(query, limit=5)
-        
+
         if memories:
             print(f"📚 Retrieved {len(memories)} relevant memories for user {user_id}")
-        
+
+        # Cache results so subsequent messages skip the 3-8s mem0 call
+        _memory_results_cache[user_id] = memories or []
         return {"memory_context": memories}
     except Exception as e:
         print(f"⚠️ Memory recall failed: {e}")
@@ -88,13 +136,14 @@ def memory_recall_node(state: Dict[str, Any]) -> Dict[str, Any]:
 def memory_store_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Store key facts from the conversation for future reference.
+    Uses cached UserMemoryManager (shared with memory_recall_node).
     """
     user_id = state.get("user_id")
     if not user_id or not MEM0_ENABLED:
         return {}
     
     try:
-        memory_manager = UserMemoryManager(user_id=user_id)
+        memory_manager = _get_memory_manager(user_id)
         
         # Create conversation context to store
         messages = [
@@ -114,6 +163,9 @@ def memory_store_node(state: Dict[str, Any]) -> Dict[str, Any]:
 def define_graph():
     """
     Build and compile the LangGraph workflow with hierarchical routing.
+    
+    Optimized (Step 6): Clarification is now handled inside the router node.
+    No separate check_clarification node needed — saves one LLM call.
     """
     workflow = StateGraph(AgentState)
     
@@ -136,90 +188,71 @@ def define_graph():
     # Memory
     workflow.add_node("memory_store", memory_store_node)
     
-    # Clarification check for complex queries
-    workflow.add_node("check_clarification", manager_agent.check_needs_clarification)
-    
     # === EDGES ===
     # Entry point
     workflow.set_entry_point("memory_recall")
     workflow.add_edge("memory_recall", "router")
     
-    # Router -> Simple or Complex (with clarification check)
-    def route_by_complexity(state: AgentState) -> Literal["research_agent", "check_clarification", "document_agent"]:
-        """Route based on query complexity."""
-        # Only route to document agent if we haven't processed it yet
+    # Router → Document / Clarification / Complex fan-out / Simple
+    def route_by_complexity(state: AgentState) -> Literal["research_agent", "document_agent", "memory_store", "law_agent", "case_agent", "citation_agent", "strategy_agent", "explainer_agent", "manager_aggregate"]:
+        """Route based on query complexity and clarification status."""
+        # Document agent takes priority if files are uploaded and not yet processed
         if state.get("uploaded_file_paths") and not state.get("document_context"):
             return "document_agent"
+        
+        # Clarification: router already set final_answer with questions → skip to end
+        if state.get("needs_clarification", False):
+            return "memory_store"
             
         complexity = state.get("complexity", "simple")
         if complexity == "complex":
-            return "check_clarification"
+            # Return first selected agent (fan-out handles the rest)
+            selected = state.get("selected_agents", [])
+            if selected:
+                return selected[0]
+            return "manager_aggregate"  # No agents selected → aggregate directly
         return "research_agent"
+    
+    # Fan-out: router routes to selected agents for complex queries
+    def route_to_agents(state: AgentState) -> List[str]:
+        """Route to selected agents based on router's assignment."""
+        if state.get("needs_clarification", False):
+            return ["__end__"]
+
+        # complexity is the ground truth — if the LLM says SIMPLE, honour it
+        # regardless of which agents it listed (the LLM often assigns agents
+        # for simple queries when it shouldn't; that causes 3-agent overhead
+        # on a question research_agent can answer alone in ~20s).
+        complexity = state.get("complexity", "complex")
+        if complexity == "simple":
+            return ["research_agent"]
+
+        selected = state.get("selected_agents", [])
+        valid = {"explainer_agent", "law_agent", "case_agent", "citation_agent", "strategy_agent"}
+        routes = [a for a in selected if a in valid]
+        return routes if routes else ["law_agent", "case_agent"]
     
     workflow.add_conditional_edges(
         "router",
-        route_by_complexity,
-        {
-            "research_agent": "research_agent",
-            "check_clarification": "check_clarification",
-            "document_agent": "document_agent"
-        }
-    )
-    
-    # Clarification check -> either ask for clarification (end) or proceed to agents
-    def route_after_clarification(state: AgentState) -> Literal["law_agent", "case_agent", "citation_agent", "strategy_agent", "explainer_agent", "research_agent", "manager_aggregate", "memory_store"]:
-        """Route based on whether clarification is needed."""
-        if state.get("needs_clarification", False):
-            # Skip to memory store (final_answer already set with questions)
-            return "memory_store"
-        
-        # Go directly to agents - router already assigned tasks
-        selected = state.get("selected_agents", [])
-        if selected:
-            # Return first agent in list (conditional edges must return single node)
-            # The actual fan-out happens in the next conditional
-            return selected[0] if selected else "manager_aggregate"
-        return "manager_aggregate"
-    
-    # For complex queries after clarification -> dynamic fan-out to selected agents
-    def route_to_agents(state: AgentState) -> List[str]:
-        """Route to selected agents based on router's assignment."""
-        selected = state.get("selected_agents", [])
-        
-        # Validate only
-        valid = ["research_agent", "explainer_agent", "law_agent", "case_agent", "citation_agent", "strategy_agent"]
-        routes = [a for a in selected if a in valid]
-        
-        # Fallback
-        if not routes:
-            return ["law_agent", "case_agent"]
-        
-        return routes
-    
-    # Add conditional fan-out from check_clarification to all possible agents
-    workflow.add_conditional_edges(
-        "check_clarification",
         route_to_agents,
-
-        ["research_agent", "explainer_agent", "law_agent", "case_agent", "citation_agent", "strategy_agent"]
+        ["research_agent", "explainer_agent", "law_agent", "case_agent", "citation_agent", "strategy_agent", "__end__"]
     )
     
-    # Fan-in: All complex agents -> Manager Aggregate
+    # Fan-in: All complex agents → Manager Aggregate
     workflow.add_edge("law_agent", "manager_aggregate")
     workflow.add_edge("case_agent", "manager_aggregate")
     workflow.add_edge("citation_agent", "manager_aggregate")
     workflow.add_edge("strategy_agent", "manager_aggregate")
     workflow.add_edge("explainer_agent", "manager_aggregate")
     
-    # Simple path: Research -> Memory Store
-    workflow.add_edge("research_agent", "memory_store")
+    # Simple path: Research → END
+    workflow.add_edge("research_agent", END)
     
-    # Document Agent -> Memory Store (End)
-    workflow.add_edge("document_agent", "memory_store")
+    # Document Agent → END
+    workflow.add_edge("document_agent", END)
     
-    # Aggregate -> Memory Store -> END
-    workflow.add_edge("manager_aggregate", "memory_store")
-    workflow.add_edge("memory_store", END)
+    # Aggregate → END
+    workflow.add_edge("manager_aggregate", END)
     
     return workflow.compile()
 
@@ -228,72 +261,75 @@ def define_graph():
 app = define_graph()
 
 
-# Convenience function for direct invocation
-def run_query(
+def prepare_initial_state(
     query: str,
     user_id: str = None,
     session_id: str = None,
     llm_mode: str = "fast",
-    file_path: str = None
-) -> Dict[str, Any]:
-    """
-    Run a legal research query through the agent workflow.
-    
-    Args:
-        query: User's legal research query
-        user_id: Optional user ID for memory personalization
-        session_id: Optional session ID for conversation tracking
-        llm_mode: "fast" or "reasoning"
-    
-    Returns:
-        Final state with answer and context
-    """
-    # Rewrite query if needed (rule-based + LLM fallback)
-    print(f"🔄 run_query called with: {query}")
+    file_path: str = None,
+    chat_store_instance=None,
+    tracker=None
+) -> dict:
+    """Prepare the initial state for the graph."""
+    if not tracker:
+        from lex_bot.core.timing import LatencyTracker
+        tracker = LatencyTracker()
+        
+    print(f"🔄 Preparing initial state for query: {query}")
     
     # Auto-detect file path from session cache if not provided
     uploaded_file_paths = []
-    if session_id:
-        try:
-            from lex_bot.tools.session_cache import get_session_cache
-            cache = get_session_cache()
-            
-            # Get all paths
-            paths = cache.get_file_paths(session_id)
-            if paths:
-                uploaded_file_paths = paths
-                print(f"📂 Found {len(paths)} uploaded files in cache: {paths}")
+    with tracker.step("file_detection"):
+        if session_id:
+            try:
+                from lex_bot.tools.session_cache import get_session_cache
+                cache = get_session_cache()
                 
-            # If explicit path provided, ensure it's in list (unlikely in normal flow but good for safety)
-            if file_path and file_path not in uploaded_file_paths:
-                uploaded_file_paths.append(file_path)
-                
-        except Exception as e:
-            print(f"⚠️ Failed to check session cache for files: {e}")
-    elif file_path:
-        uploaded_file_paths = [file_path]
+                # Get all paths
+                paths = cache.get_file_paths(session_id)
+                if paths:
+                    uploaded_file_paths = paths
+                    print(f"📂 Found {len(paths)} uploaded files in cache: {paths}")
+                    
+                # If explicit path provided, ensure it's in list (unlikely in normal flow but good for safety)
+                if file_path and file_path not in uploaded_file_paths:
+                    uploaded_file_paths.append(file_path)
+                    
+            except Exception as e:
+                print(f"⚠️ Failed to check session cache for files: {e}")
+        elif file_path:
+            uploaded_file_paths = [file_path]
 
-    from lex_bot.core.query_rewriter import rewrite_query
-    print("🔄 Calling rewrite_query...")
-    processed_query = rewrite_query(query, user_id=user_id, session_id=session_id)
-    print(f"✅ Query rewritten to: {processed_query}")
-    
-    # Fetch chat history
+    # Fetch chat history FIRST (single source of truth)
     chat_history = []
-    if user_id and session_id:
-        try:
-            from lex_bot.memory.chat_store import ChatStore
-            store = ChatStore()
-            # Get last 10 messages
-            history = store.get_session_history(user_id, session_id, limit=10)
-            # Convert to LangChain format
-            for msg in history:
-                chat_history.append({"role": msg["role"], "content": msg["content"]})
-            print(f"📜 Loaded {len(chat_history)} previous messages for context")
-        except Exception as e:
-            print(f"⚠️ Failed to load chat history: {e}")
+    with tracker.step("history_fetch"):
+        if user_id and session_id:
+            try:
+                if chat_store_instance:
+                    store = chat_store_instance
+                else:
+                    from lex_bot.memory.chat_store import ChatStore
+                    store = ChatStore()
+                # Get last 10 messages
+                history = store.get_session_history(user_id, session_id, limit=10)
+                # Convert to LangChain format
+                for msg in history:
+                    chat_history.append({"role": msg["role"], "content": msg["content"]})
+                print(f"📜 Loaded {len(chat_history)} previous messages for context")
+            except Exception as e:
+                print(f"⚠️ Failed to load chat history: {e}")
 
-    initial_state = {
+    # Rewrite query — pass pre-fetched history to avoid duplicate DB reads
+    with tracker.step("query_rewrite"):
+        from lex_bot.core.query_rewriter import rewrite_query
+        print("🔄 Calling rewrite_query...")
+        processed_query = rewrite_query(
+            query, user_id=user_id, session_id=session_id,
+            chat_history=chat_history
+        )
+        print(f"✅ Query rewritten to: {processed_query}")
+    
+    return {
         "messages": chat_history,
         "original_query": processed_query,  # Use rewritten query
         "user_id": user_id,
@@ -307,10 +343,41 @@ def run_query(
         "tool_results": [],
         "errors": [],
     }
+
+def run_query(
+    query: str,
+    user_id: str = None,
+    session_id: str = None,
+    llm_mode: str = "fast",
+    file_path: str = None,
+    chat_store_instance=None
+) -> Dict[str, Any]:
+    """
+    Run a legal research query through the agent workflow.
+    """
+    from lex_bot.core.timing import LatencyTracker
+    tracker = LatencyTracker()
+
+    initial_state = prepare_initial_state(
+        query=query,
+        user_id=user_id,
+        session_id=session_id,
+        llm_mode=llm_mode,
+        file_path=file_path,
+        chat_store_instance=chat_store_instance,
+        tracker=tracker
+    )
     
-    print("🚀 Invoking graph app.invoke(initial_state)...")
-    result = app.invoke(initial_state)
-    print("✅ Graph invocation complete.")
+    with tracker.step("graph_invoke"):
+        print("🚀 Invoking graph app.invoke(initial_state)...")
+        result = app.invoke(initial_state)
+        print("✅ Graph invocation complete.")
+        
+    # Log latency breakdown
+    tracker.summary()
+
+    # Attach timing to result for API-level observability
+    result["latency"] = tracker.as_dict()
     return result
 
 

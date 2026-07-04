@@ -1,70 +1,89 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
-import './MainLayout.css';
-import smallLogo from '../assets/draftmate_logo.png';
-import fullLogo from '../assets/FULL_LOGO.svg';
-import { useNotifications } from '../context/NotificationContext';
+import { motion, AnimatePresence } from 'framer-motion';
+import { toast } from 'sonner';
+import { API_CONFIG } from '../services/endpoints';
+import ErrorBoundary from '../components/ErrorBoundary';
+import { 
+  Search, Bell, LayoutDashboard, FileText, Scale, FolderOpen, 
+  Languages, Library, GraduationCap, Eye, Gavel, Wrench, 
+  Settings, Menu, X, Zap, ChevronLeft, ChevronRight, LogOut,
+  CreditCard, HelpCircle, BookOpen, MessageSquare, Gift, Bug, Copy, Share2, UploadCloud
+} from 'lucide-react';
 
-const MainLayout = () => {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const { unreadCount } = useNotifications();
+const SIDEBAR_ITEMS = [
+  { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard/home" },
+  { icon: Scale, label: "Legal Research", path: "/dashboard/research" },
+  { icon: FolderOpen, label: "Document Management", path: "/dashboard/cases" },
+  { icon: FileText, label: "My Drafts", path: "/dashboard/drafts" },
+  { icon: Languages, label: "Translations", path: "/dashboard/translate" },
+  { icon: Library, label: "Legal Library", path: "/dashboard/library" },
+  { icon: GraduationCap, label: "Student Mode", path: "/dashboard/academy" },
+  { icon: Eye, label: "Visibility & Reach", path: "/dashboard/profile" },
+  { icon: Gavel, label: "E-Court Services", path: "/dashboard/ecourt" },
+  { icon: Wrench, label: "Tools", path: "/dashboard/tools" },
+];
 
-  const isActive = (path) => location.pathname === path;
+const UTILITY_ITEMS = [
+  { icon: HelpCircle, label: "Help & Support", path: "/dashboard/help" },
+  { icon: Settings, label: "Settings", path: "/dashboard/settings" },
+  { icon: CreditCard, label: "Billing & Plans", path: "/dashboard/billing" },
+];
 
-  // Force Light Mode
-  useEffect(() => {
-    document.documentElement.classList.remove('dark');
-    localStorage.removeItem('theme');
+export default function MainLayout() {
+  const [isSidebarOpen, setSidebarOpen] = useState(true);
+  const [isMobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+  
+  // Modal States
+  const [isReferOpen, setIsReferOpen] = useState(false);
+  const [isBugOpen, setIsBugOpen] = useState(false);
 
-    const handleProfileUpdate = () => {
-      const saved = localStorage.getItem('user_profile');
-      if (saved) {
-        // Update local state is managed internally for now
-      }
-    };
-
-    window.addEventListener('user_profile_updated', handleProfileUpdate);
-    return () => window.removeEventListener('user_profile_updated', handleProfileUpdate);
-  }, []);
-
-  // Initialize profile from storage or defaults
-  const [userProfile, setUserProfile] = useState(() => {
-    const saved = localStorage.getItem('user_profile');
-    if (saved) return JSON.parse(saved);
-    return {
-      name: "Attorney Davis",
-      email: "davis@draftmate.com",
-      image: "https://lh3.googleusercontent.com/aida-public/AB6AXuCf79wuBAV_uurpxIHNj8aieGbEhEXhNnnRbN4i6y6PB0cDQAIRL9j87KI1_P114LVgr1D83UM0cCNfd5rdo7Lgoukm2J7UpdQlshSXI1k296RyvODHng12-_Tgx2DvQBf07mko3b0GUnUqoofVCNHdDorsXylCZ2ZYcheYqOrU1fK68F4Io3yKaBeUc1s9moLHx_8V9HmPO4qleggBYJCVjxMsWblqTXMqk29SbcNjAAARdb2_y7Y7m6e7d39-tfL7WBs3YUvm84U"
-    };
+  const [userProfile, setUserProfile] = useState({
+      firstName: 'Devendra',
+      lastName: 'Gupta',
+      workplace: 'DraftMate Legal'
   });
 
-  // Listen for updates
   useEffect(() => {
-    const handleUpdate = () => {
-      const saved = localStorage.getItem('user_profile');
-      if (saved) setUserProfile(JSON.parse(saved));
-    };
-    window.addEventListener('user_profile_updated', handleUpdate);
-    return () => window.removeEventListener('user_profile_updated', handleUpdate);
+      const loadProfile = () => {
+          const saved = localStorage.getItem('user_profile');
+          if (saved) {
+              const parsed = JSON.parse(saved);
+              setUserProfile(prev => ({ ...prev, ...parsed }));
+          }
+      };
+      loadProfile(); // Initial load
+      window.addEventListener('user_profile_updated', loadProfile);
+      return () => window.removeEventListener('user_profile_updated', loadProfile);
   }, []);
 
-  const isCollapsed = ['/dashboard/editor', '/dashboard/research', '/dashboard/pdf-editor'].some(path => location.pathname.startsWith(path));
+  const location = useLocation();
+  const navigate = useNavigate();
 
-  const NavItem = ({ to, icon, label }) => {
-    const active = isActive(to);
-    const baseClasses = "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors group";
-    const activeClasses = "bg-primary/10 text-primary dark:text-blue-400";
-    const inactiveClasses = "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white";
-    const iconClass = active ? "icon-fill" : "";
-    const alignmentClasses = isCollapsed ? "justify-center px-0 w-8 h-8 mx-auto rounded-lg" : "";
+  useEffect(() => {
+    const handleScroll = () => setScrolled(window.scrollY > 20);
+    window.addEventListener("scroll", handleScroll);
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
 
-    return (
-      <Link to={to} className={`${baseClasses} ${active ? activeClasses : inactiveClasses} ${alignmentClasses}`} title={isCollapsed ? label : ''}>
-        <span className={`material-symbols-outlined ${iconClass} ${isCollapsed ? 'text-xl' : ''}`}>{icon}</span>
-        {!isCollapsed && <span className="text-sm font-medium">{label}</span>}
-      </Link>
-    );
+  const handleLogout = async () => {
+    const sessionId = localStorage.getItem('session_id');
+    try {
+        if (sessionId) {
+            const logoutUrl = `${API_CONFIG.AUTH.BASE_URL}${API_CONFIG.AUTH.ENDPOINTS.LOGOUT}`;
+            await fetch(logoutUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId })
+            });
+        }
+    } catch (error) {
+        console.error('Logout failed:', error);
+    } finally {
+        toast.success('Logged out successfully');
+        navigate('/login');
+    }
   };
 
   return (
@@ -90,65 +109,97 @@ const MainLayout = () => {
 
               <NavItem to="/dashboard/settings" icon="settings" label="Settings" />
             </div>
-          </nav>
+            <AnimatePresence>
+              {isSidebarOpen && (
+                <motion.img 
+                  initial={{ opacity: 0, width: 0 }} animate={{ opacity: 1, width: 130 }} exit={{ opacity: 0, width: 0 }}
+                  src="/text-removebg-preview.png" alt="DraftMate" className="h-8 object-contain mix-blend-multiply" 
+                />
+              )}
+            </AnimatePresence>
+          </Link>
+        </div>
 
-          {/* Support & Utility */}
-          <div className={`w-full pt-4 border-t border-slate-200 dark:border-slate-800 ${isCollapsed ? 'px-1' : ''}`}>
-            <div className={`flex items-center gap-2 ${isCollapsed ? 'flex-col space-y-2' : 'px-2'}`}>
-              <Link
-                to="/dashboard/notifications"
-                className={`relative flex items-center justify-center p-2.5 rounded-lg transition-colors group text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white border border-transparent hover:border-slate-200 dark:hover:border-slate-700 ${isCollapsed ? '' : 'flex-1'}`}
-                title="Notifications"
-              >
-                <span className="material-symbols-outlined text-xl">notifications</span>
-                {unreadCount > 0 && (
-                  <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500 text-[8px] font-bold text-white items-center justify-center">
-                      {unreadCount > 9 ? '9+' : unreadCount}
-                    </span>
-                  </span>
-                )}
+        <div className="flex-1 overflow-y-auto py-6 px-3 space-y-1.5 scrollbar-hide">
+          {SIDEBAR_ITEMS.map((item) => {
+            const isActive = location.pathname.includes(item.path);
+            return (
+              <Link key={item.label} to={item.path} className="block">
+                <motion.div 
+                  whileHover={{ x: 4 }}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 group relative ${
+                    isActive ? "bg-blue-50 text-blue-600 font-bold" : "text-slate-500 hover:bg-blue-50 hover:text-blue-600 font-medium"
+                  }`}
+                >
+                  {isActive && <motion.div layoutId="activeNav" className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-blue-600 rounded-r-full" />}
+                  <item.icon className={`w-5 h-5 shrink-0 ${isActive ? "text-blue-600" : "text-slate-400 group-hover:text-blue-500 transition-colors"}`} />
+                  {isSidebarOpen && <span className="text-[13px] whitespace-nowrap">{item.label}</span>}
+                </motion.div>
               </Link>
+            );
+          })}
+        </div>
 
-              <Link
-                to="/dashboard/help"
-                className={`flex items-center justify-center p-2.5 rounded-lg transition-colors group text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white border border-transparent hover:border-slate-200 dark:hover:border-slate-700 ${isCollapsed ? '' : 'flex-1'}`}
-                title="Help Center"
-              >
-                <span className="material-symbols-outlined text-xl">help</span>
-              </Link>
+        {/* Footer Utilities */}
+        <div className="p-3 border-t border-slate-100 max-h-[220px] overflow-y-auto scrollbar-hide space-y-1">
+          {UTILITY_ITEMS.map((item) => {
+             const isActive = location.pathname.includes(item.path);
+             return (
+               <Link key={item.label} to={item.path} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group ${isActive ? 'bg-blue-50 text-blue-600' : 'text-slate-500 hover:bg-blue-50 hover:text-blue-600'}`}>
+                 <item.icon className={`w-4 h-4 shrink-0 transition-colors ${isActive ? 'text-blue-600' : 'text-slate-400 group-hover:text-blue-500'}`} />
+                 {isSidebarOpen && <span className={`text-xs ${isActive ? 'font-bold' : 'font-medium'}`}>{item.label}</span>}
+               </Link>
+             );
+          })}
+          <button onClick={handleLogout} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-red-500 hover:bg-red-50 transition-colors group mt-2 border border-transparent hover:border-red-100">
+            <LogOut className="w-4 h-4 shrink-0 text-red-400 group-hover:text-red-500" />
+            {isSidebarOpen && <span className="text-xs font-semibold">Logout</span>}
+          </button>
+        </div>
 
-              <button
-                onClick={() => {
-                  // localStorage.clear();
-                  window.location.href = '/login';
-                }}
-                className={`flex items-center justify-center p-2.5 rounded-lg transition-colors group text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 border border-transparent hover:border-red-100 dark:hover:border-red-900/40 ${isCollapsed ? '' : 'flex-1'}`}
-                title="Logout"
-              >
-                <span className="material-symbols-outlined text-xl">logout</span>
-              </button>
-            </div>
-          </div>
+        {/* User Profile in Sidebar with Plan Indicator */}
+        <div onClick={() => navigate('/dashboard/settings')} className="p-4 border-t border-slate-100 bg-slate-50/50 hover:bg-blue-50 transition-colors cursor-pointer flex items-center gap-3 overflow-hidden group">
+           <img src="https://i.pravatar.cc/150?img=11" alt="Profile" className="w-9 h-9 rounded-full shadow-sm shrink-0 border border-slate-200 group-hover:border-blue-300 transition-colors" />
+           <AnimatePresence>
+             {isSidebarOpen && (
+               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col overflow-hidden">
+                 <span className="text-sm font-bold text-[#0F1C2E] truncate group-hover:text-blue-700 transition-colors">
+                     {userProfile.firstName} {userProfile.lastName}
+                 </span>
+                 <span className="text-[10px] font-medium text-slate-500 truncate mb-1.5">
+                     {userProfile.workplace || 'DraftMate Legal'}
+                 </span>
+                 <span className="inline-block bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider w-max">Pro Plan</span>
+               </motion.div>
+             )}
+           </AnimatePresence>
+        </div>
 
-          {/* Profile Section */}
-          <div className={`w-full pt-4 ${isCollapsed ? '' : ''}`}>
-            <Link
-              to="/dashboard/settings"
-              className={`flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer group relative overflow-hidden ${isCollapsed ? 'justify-center w-10 h-10 mx-auto p-0' : ''}`}
+        <button 
+          onClick={() => setSidebarOpen(!isSidebarOpen)}
+          className="absolute -right-3 top-20 w-6 h-6 bg-white border border-slate-200 rounded-full flex items-center justify-center text-slate-400 hover:text-blue-600 hover:border-blue-300 shadow-sm z-50 transition-colors"
+        >
+          {isSidebarOpen ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        </button>
+      </motion.aside>
+
+      {/* ── MOBILE DRAWER ── */}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setMobileMenuOpen(false)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-40 lg:hidden" />
+            <motion.aside 
+              initial={{ x: "-100%" }} animate={{ x: 0 }} exit={{ x: "-100%" }} transition={{ type: "spring", bounce: 0, duration: 0.4 }}
+              className="fixed inset-y-0 left-0 w-[280px] bg-white z-50 shadow-2xl flex flex-col lg:hidden"
             >
-              <div className="relative shrink-0">
-                <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden border border-slate-200 dark:border-slate-600">
-                  {userProfile?.image ? (
-                    <img src={userProfile.image} alt="Profile" className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-slate-500 font-medium">
-                      {userProfile?.name?.charAt(0) || 'U'}
+              <div className="h-[70px] flex items-center justify-between px-6 border-b border-slate-100">
+                 <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+                      <img src="/logo.png" alt="DraftMate" className="w-6 h-6 object-contain" />
                     </div>
-                  )}
-                </div>
-                <div className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-green-500 border-2 border-white dark:border-[#151f2e]"></div>
+                    <img src="/text-removebg-preview.png" alt="DraftMate" className="h-8 object-contain mix-blend-multiply" />
+                 </div>
+                 <button onClick={() => setMobileMenuOpen(false)} className="p-2 text-slate-400 hover:text-slate-700 bg-slate-50 rounded-full"><X className="w-4 h-4" /></button>
               </div>
               {!isCollapsed && (
                 <div className="flex-1 min-w-0">
